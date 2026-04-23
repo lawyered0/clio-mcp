@@ -109,7 +109,7 @@ Claude Desktop has three independent surfaces in the same app:
 | Regular chat | DXT extensions | ✓ |
 | Cowork | URL-based connectors | ✗ (different system) |
 
-For the Cowork surface, you'd need to expose the server as an HTTPS endpoint (e.g. via Cloudflare Tunnel) and add it to Cowork's connector form. Cowork rejects plain HTTP and may also reject `127.0.0.1` URLs. That's a separate setup path; this doc only covers the DXT path which works for Code tab and regular chat.
+For the Cowork surface, you'd theoretically expose the server as an HTTPS endpoint (e.g. via Cloudflare Tunnel) and add it to Cowork's connector form. Cowork rejects plain HTTP and may also reject `127.0.0.1` URLs even with HTTPS. **This path was not verified** by the original author — DXT into Claude Desktop covers the Code tab and regular chat surfaces, which was sufficient. If you make Cowork work, please open a PR with the steps.
 
 ## Troubleshooting
 

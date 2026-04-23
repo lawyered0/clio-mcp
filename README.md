@@ -41,15 +41,35 @@ cp .env.example .env
 
 # 4. Test it works (Ctrl+C to exit)
 python clio_mcp_server.py --stdio
-# Or run as an HTTP service for URL-based connectors:
-python clio_mcp_server.py            # binds 127.0.0.1:8765 by default
 
-# 5. Wire it into your MCP client of choice
-#    - Claude Code CLI:        edit ~/.claude/settings.json (see below)
-#    - Claude Desktop:         build a DXT (see docs/claude-desktop-dxt.md)
-#    - Cowork / claude.ai web: needs HTTPS — use a tunnel like Cloudflare Tunnel
-#    - MCP Inspector:          mcp dev clio_mcp_server.py
+# 5. Wire it into your MCP client (verified paths below)
+#    - Claude Desktop:   build a DXT (see docs/claude-desktop-dxt.md)  ← recommended
+#    - Claude Code CLI:  edit ~/.claude/settings.json (see below)
+#    - MCP Inspector:    mcp dev clio_mcp_server.py  (for development)
 ```
+
+## Verified clients
+
+This server has been used in production against the following MCP clients:
+
+| Client | Transport | How to wire | Status |
+|---|---|---|---|
+| **Claude Desktop** (Code tab and regular chat) | stdio | DXT extension — see [docs/claude-desktop-dxt.md](docs/claude-desktop-dxt.md) | ✅ Verified |
+| **Claude Code CLI** | stdio | `~/.claude/settings.json` — see below | ✅ Verified |
+| **MCP Inspector** | stdio | `mcp dev clio_mcp_server.py` | ✅ Verified |
+| Cowork / claude.ai web / other URL-based hosts | HTTPS | Would need a public tunnel + auth on the server | ⚠️ Not pursued — see [HTTP mode notes](#http-mode-not-recommended-yet) |
+
+**TL;DR:** if you're on Mac, install via DXT into Claude Desktop. If you're already a Claude Code CLI user, the JSON config is two lines. Either path takes ~5 minutes once you have OAuth credentials.
+
+### HTTP mode (not recommended yet)
+
+The server can also run as an HTTP service:
+
+```bash
+python clio_mcp_server.py    # binds 127.0.0.1:8765/mcp by default
+```
+
+This was built for use with URL-based connectors (Cowork, claude.ai web, etc.) but those hosts typically require HTTPS, often reject `127.0.0.1` URLs, and may have additional security policies. Making this safe for production use means: terminating TLS (e.g. Caddy with `tls internal`), exposing it via a tunnel (e.g. Cloudflare Tunnel), and adding header-based auth inside the server. **None of that is implemented or verified.** PRs welcome.
 
 ### Claude Code CLI config
 

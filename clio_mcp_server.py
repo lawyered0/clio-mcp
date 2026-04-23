@@ -1,9 +1,17 @@
 """
 clio-mcp — A Model Context Protocol server for Clio Manage.
 
-Exposes the Clio Manage v4 REST API as MCP tools so Claude (Desktop, Cowork,
-Code, or any MCP-compatible client) can read and write Clio data: contacts,
-matters, activities.
+Exposes the Clio Manage v4 REST API as MCP tools for Claude (or any
+MCP-compatible client) to read and write contacts, matters, and activities.
+
+Verified against:
+  - Claude Desktop's Code tab via a custom DXT extension
+  - Claude Code CLI via ~/.claude/settings.json
+  - MCP Inspector via `mcp dev clio_mcp_server.py`
+
+Other surfaces (Cowork, claude.ai web, etc.) require URL-based HTTPS
+connectors and are NOT verified — the server can run in HTTP mode but
+exposing it safely requires extra plumbing (cert, tunnel, auth).
 
 Includes a documented workaround for Clio's silent rejection of `billing_method`
 on POST /matters.json — see docs/flat-fee-workaround.md and the
@@ -30,7 +38,8 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 # Load .env from the script directory so cwd doesn't matter when the host
-# (Claude Desktop, Cowork, etc.) launches the server from an arbitrary dir.
+# (Claude Desktop, Claude Code, MCP Inspector, etc.) launches the server
+# from an arbitrary working directory.
 _SCRIPT_DIR = Path(__file__).resolve().parent
 load_dotenv(_SCRIPT_DIR / ".env")
 
