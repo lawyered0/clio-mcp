@@ -31,8 +31,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Get OAuth credentials from Clio (one-time)
-#    See docs/oauth-setup.md for the authorization-code flow walkthrough.
+# 2. Get OAuth credentials from Clio (one-time, ~5 min)
+#    See "Getting Clio OAuth credentials" below for the full dance.
 #    You'll end up with: CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN.
 
 # 3. Configure
@@ -95,6 +95,88 @@ CLIO_DEFAULT_ATTORNEY_ID=
 ```
 
 `chmod 600 .env` for hygiene.
+
+## Getting Clio OAuth credentials (one-time)
+
+This is the trickiest part of setup. Clio uses OAuth 2.0 authorization-code flow — you do this dance once to mint a refresh token, then the server handles access-token refreshes automatically. The refresh token is long-lived, so you should only ever do this once per OAuth app (unless the token gets revoked).
+
+### Step 1 — Create a developer application in Clio
+
+Sign in to Clio and go to **Settings → Developer Applications**. Direct URL by region:
+
+- US: `https://app.clio.com/settings/developer_applications`
+- CA: `https://ca.app.clio.com/settings/developer_applications`
+- EU/UK: `https://eu.app.clio.com/settings/developer_applications`
+- AU: `https://au.app.clio.com/settings/developer_applications`
+
+Click **New Application**. Fill in:
+
+- **Name**: anything (e.g. `Clio MCP`)
+- **Redirect URI**: `http://localhost:8765/callback`
+  (Clio just needs the code to land somewhere — the page will fail to load when you're redirected there, that's expected and fine)
+- **Scope**: check **every scope you might want to use** — adding scopes later requires re-running this whole dance. At minimum: `contacts`, `matters`, `activities`, `users`. Add `bills`, `calendar`, `documents` if you'll extend.
+
+Save. You get back:
+
+- **Client ID** (visible in the app list anytime)
+- **Client Secret** (shown once on creation — copy it now, you cannot retrieve it later)
+
+### Step 2 — Get an authorization code
+
+Visit this URL in your browser, substituting `YOUR_CLIENT_ID` and your region's host:
+
+```
+https://app.clio.com/oauth/authorize?response_type=code&client_id=YOUR_CLIENT_ID&redirect_uri=http://localhost:8765/callback
+```
+
+Approve. Your browser will redirect to `http://localhost:8765/callback?code=XXXXXXXX...` and show a "connection refused" error page. **Ignore the error** — copy the `code=XXXXXXXX` value out of the browser's address bar.
+
+The code is single-use and expires in ~10 minutes. Move quickly to Step 3.
+
+### Step 3 — Exchange the code for a refresh token
+
+```bash
+curl -X POST https://app.clio.com/oauth/token \
+  -d "client_id=YOUR_CLIENT_ID" \
+  -d "client_secret=YOUR_CLIENT_SECRET" \
+  -d "grant_type=authorization_code" \
+  -d "code=THE_CODE_FROM_STEP_2" \
+  -d "redirect_uri=http://localhost:8765/callback"
+```
+
+(Substitute your region's host if not US.)
+
+Response:
+
+```json
+{
+  "access_token": "<short-lived; ignore>",
+  "token_type": "bearer",
+  "expires_in": 2592000,
+  "refresh_token": "<this is the one you want>"
+}
+```
+
+**Copy the `refresh_token`** — that's what goes into `.env` as `CLIO_REFRESH_TOKEN`. The `access_token` you can discard; the server mints fresh ones on demand.
+
+### Step 4 — Drop into `.env`
+
+```
+CLIO_CLIENT_ID=<from Step 1>
+CLIO_CLIENT_SECRET=<from Step 1>
+CLIO_REFRESH_TOKEN=<from Step 3>
+```
+
+Run `clio_who_am_i` via your MCP client. If it returns 200 with your user record — you're done forever. If 401 — re-run from Step 2 (the code expired, or the redirect URI didn't match exactly).
+
+### Common gotchas
+
+- **`redirect_uri` must match EXACTLY** between the app config, the `/oauth/authorize` URL, and the `/oauth/token` POST — including trailing slash, port, and protocol. Mismatches return generic `400 invalid_grant`.
+- **Don't reuse the code** — it's single-use. If you get `invalid_grant` on Step 3, the code probably expired (10 min limit) or was already used.
+- **Region matters** — if your Clio account is on `ca.app.clio.com`, use that host throughout. Mixing US and non-US endpoints in the dance returns `400 invalid_grant` or `401` later.
+- **Scope changes require re-doing the dance.** If you add `bills` to the app's scopes later, you need a new auth code → new refresh token. Existing tokens don't auto-acquire new scopes.
+
+For re-authorization (if your refresh token ever gets revoked) and additional troubleshooting, see [docs/oauth-setup.md](docs/oauth-setup.md).
 
 ## Confirmed Clio API quirks
 
