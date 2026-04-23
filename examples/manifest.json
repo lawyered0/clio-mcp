@@ -1,0 +1,40 @@
+{
+  "manifest_version": "0.3",
+  "name": "clio-mcp",
+  "display_name": "Clio MCP",
+  "version": "1.0.0",
+  "description": "MCP server for Clio Manage v4 API. 10 tools for contacts, matters, and activities, with the documented flat-fee billing workaround.",
+  "author": {
+    "name": "<your name>",
+    "url": "https://github.com/<your-username>/clio-mcp"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "clio_mcp_server.py",
+    "mcp_config": {
+      "command": "/absolute/path/to/clio-mcp/.venv/bin/python",
+      "args": [
+        "/absolute/path/to/clio-mcp/clio_mcp_server.py",
+        "--stdio"
+      ],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "clio_who_am_i",                "description": "Auth check — confirm credentials work." },
+    { "name": "clio_create_company_contact",  "description": "Create entity contact (Inc., LLC, etc.)." },
+    { "name": "clio_create_person_contact",   "description": "Create individual contact." },
+    { "name": "clio_create_matter",           "description": "Create matter; auto-attorney optional." },
+    { "name": "clio_create_flat_fee_activity","description": "Add flat-fee billable line item (workaround for billing_method limitation)." },
+    { "name": "clio_find_contact",            "description": "Search contacts by name and/or email." },
+    { "name": "clio_find_matter",             "description": "Search matters by display_number, query, or client_id." },
+    { "name": "clio_delete_matter",           "description": "Delete matter (test data cleanup)." },
+    { "name": "clio_delete_contact",          "description": "Delete contact (test data cleanup; fails if has open bills)." },
+    { "name": "clio_api_request",             "description": "Generic Clio v4 API call escape hatch." }
+  ],
+  "license": "MIT",
+  "keywords": ["clio", "legal", "law-practice", "billing", "matters", "mcp"],
+  "compatibility": {
+    "platforms": ["darwin"]
+  }
+}
