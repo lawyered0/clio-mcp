@@ -20,8 +20,8 @@ Save this as `manifest.json`:
   "version": "1.0.0",
   "description": "MCP server for Clio Manage v4 API.",
   "author": {
-    "name": "<your name>",
-    "url": "https://github.com/<your-username>/clio-mcp"
+    "name": "Lawyered0",
+    "url": "https://github.com/Lawyered0/clio-mcp"
   },
   "server": {
     "type": "python",

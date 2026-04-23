@@ -13,7 +13,7 @@ Built with FastMCP from the official Anthropic MCP SDK
 (`pip install "mcp[cli]"`).
 
 License: MIT
-Repo:    https://github.com/<your-username>/clio-mcp
+Repo:    https://github.com/Lawyered0/clio-mcp
 """
 
 from __future__ import annotations

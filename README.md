@@ -25,7 +25,7 @@ Lets [Claude](https://claude.ai) (or any MCP client) read and write your Clio da
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/<your-username>/clio-mcp.git
+git clone https://github.com/Lawyered0/clio-mcp.git
 cd clio-mcp
 python3 -m venv .venv
 source .venv/bin/activate
@@ -180,3 +180,5 @@ MIT. See [LICENSE](LICENSE).
 ## Acknowledgements
 
 Built from frustration with the official documentation. The flat-fee workaround in particular took several hours of empirical testing to uncover — written up in [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) so the next person doesn't have to.
+
+By [@BitGrateful](https://x.com/BitGrateful).

@@ -5,8 +5,8 @@
   "version": "1.0.0",
   "description": "MCP server for Clio Manage v4 API. 10 tools for contacts, matters, and activities, with the documented flat-fee billing workaround.",
   "author": {
-    "name": "<your name>",
-    "url": "https://github.com/<your-username>/clio-mcp"
+    "name": "Lawyered0",
+    "url": "https://github.com/Lawyered0/clio-mcp"
   },
   "server": {
     "type": "python",
