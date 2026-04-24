@@ -1,113 +1,100 @@
-# The flat-fee matter workaround
+# Flat-fee matter setup
 
-> **TL;DR:** Clio's REST API silently ignores `billing_method` on `POST /matters.json`. Every value gets saved as `"hourly"`. The only way to bill flat-fee via the API is to leave the matter as `"hourly"` and add a flat-amount Activity. Use `clio_create_flat_fee_activity` (it's an `ExpenseEntry` under the hood — `TimeEntry` with 0 hours always totals $0).
+> **TL;DR:** The `billing_method` field at the matter root is silently ignored on POST/PATCH. But flat fee **is** settable via a nested `custom_rate` association — PATCH `matters/{id}.json` with `{"data": {"custom_rate": {"type": "FlatRate", "rates": [{"user": {"id": <attorney>}, "rate": <amount>}]}}}` and Clio (a) flips `billing_method` to `"flat"` and (b) auto-creates a billable `flat_rate: true` TimeEntry whose total equals the amount. That's the one-step, Clio-native setup. The tool `clio_create_matter` takes an optional `flat_rate_amount` parameter that does this for you.
 
-## Why this exists
+## History
 
-If you naively try:
+The title of this file still says "workaround" for historical reasons. Early versions of this server couldn't figure out how to set flat-fee billing via the public v4 API — the natural-looking field `billing_method: "flat"` is silently dropped on POST, and every companion field guess (`flat_rate_amount`, `flat_rate`, `rate`, `matter_rate`, `billing_preference`, etc.) is also ignored. A workaround was adopted: leave matters as `"hourly"` and attach a flat-amount `ExpenseEntry` for the fee. Bills generated from the matter would total to the activity amount, but the matter-level label still read `"hourly"` in reports.
+
+Clio Support later pointed at the **Matters > Associations > Custom Rates** section of the v4 docs. Testing confirmed that `custom_rate` as a nested association works where `billing_method` at the root does not. This doc has been updated to reflect the correct path; the ExpenseEntry workaround is preserved below for cases where it's still useful (add-on charges, post-hoc line items).
+
+## The correct path: `custom_rate` PATCH
 
 ```python
-clio_create_matter(
+# Step 1: Create the matter
+response = clio_create_matter(
     client_id=123,
     description="Demand letter",
-    billing_method="flat",   # <-- you'd think this works
+    flat_rate_amount=595.00,   # <-- the key
 )
 ```
 
-Clio returns 201 Created. Looks fine. Then you `GET /matters/<id>.json?fields=billing_method` and get back:
-
-```json
-{"data": {"billing_method": "hourly"}}
-```
-
-Your `"flat"` was silently dropped. No warning, no error.
-
-## What I tested (so you don't have to)
-
-Every variant of `billing_method`:
-- `"flat"` → saved as `"hourly"`
-- `"Flat"` → saved as `"hourly"`
-- `"FLAT"` → saved as `"hourly"`
-- `"FlatRate"` → saved as `"hourly"`
-- `"flat_fee"` → saved as `"hourly"`
-- `"contingency"` → saved as `"hourly"`
-- `"Contingency"` → saved as `"hourly"`
-- `"hourly"` → saved as `"hourly"`
-- Integer `2`, `3` → saved as `"hourly"`
-
-PATCH after creation also fails silently:
+Under the hood, `clio_create_matter` with `flat_rate_amount` set does:
 
 ```http
-PATCH /matters/<id>.json
-{"data": {"billing_method": "flat"}}
+POST /matters.json
+{"data": {"client": {"id": 123}, "description": "Demand letter", ...}}
+→ 201 Created, matter id=999
 
+PATCH /matters/999.json
+{"data": {"custom_rate": {
+  "type": "FlatRate",
+  "rates": [{"user": {"id": <attorney>}, "rate": 595.00}]
+}}}
 → 200 OK
-→ GET shows billing_method: "hourly" still
 ```
 
-Companion fields I tried (none affect the outcome):
-- `flat_rate_amount`, `flat_rate`, `flat_rate_cost`
-- `flat_fee_amount`, `flat_fee`
-- `fee`, `fee_amount`, `quoted_fee`
-- `rate` (object), `rate_type`
-- `matter_rate`, `matter_rates`, `custom_rates`
-- `billing_preference`, `billing_type`
-- `default_rate`
+Then `GET /matters/999.json?fields=billing_method,custom_rate` returns:
 
-All silently dropped. All matters still saved as `"hourly"`.
-
-## Why does the Clio web UI show flat-fee matters then?
-
-It does — and they DO show up correctly via `GET` if you query existing matters in your account. So the field is settable somewhere; it's just not the public REST API. The Clio web UI almost certainly uses an internal/private endpoint that isn't exposed in v4.
-
-I confirmed this by emailing api@clio.com — got back a tier-1 marketing reply pointing me at the same v4 docs that don't document any flat-fee setter. Escalation didn't go anywhere useful before I found the workaround below.
-
-If you have a contact at Clio who can confirm/deny this and point at a real solution, please open an issue.
-
-## The workaround
-
-A matter in Clio is just a container. The actual billing math comes from the **activities** (time entries, expense entries, hard cost entries) attached to the matter. A bill generated from the matter totals to the sum of its billable activities — regardless of the matter-level `billing_method` label.
-
-So: leave the matter as `"hourly"` (you have no choice), and add a flat-amount activity for the quoted fee.
-
-```python
-# Step 1: Create the matter (will save as "hourly" no matter what you send)
-matter = clio_create_matter(
-    client_id=123,
-    description="Demand letter",
-)
-matter_id = matter["body"]["data"]["id"]
-
-# Step 2: Add the flat-fee activity
-clio_create_flat_fee_activity(
-    matter_id=matter_id,
-    amount=595.00,
-    description="Flat fee: demand letter",
-)
+```json
+{
+  "data": {
+    "billing_method": "flat",
+    "custom_rate": {
+      "type": "FlatRate",
+      "rates": [
+        {
+          "id": 123456,
+          "rate": 595.00,
+          "user": {"id": <attorney>, "name": "..."},
+          "activity_description": null
+        }
+      ]
+    }
+  }
+}
 ```
 
-Now generate a bill on that matter (via Clio UI or API) and it'll total $595.00. The matter still labels as "hourly" in reports — cosmetic only. You can also one-click toggle the matter to "Flat fee" in the Clio UI's matter settings if you want it to display correctly there; that's out of scope for the API.
+Separately, a billable `TimeEntry` is auto-created with `flat_rate: true`, `price: 595`, `total: 595`, `billed: false`. You can verify with `GET /activities.json?matter_id=999&fields=id,type,note,price,total,flat_rate,billed`. That's the line item the bill will pick up.
 
-## Why ExpenseEntry, not TimeEntry
+`activity_description` inside the rate is optional — pass it as `null` (or omit) if you don't have a specific activity description to tie the rate to. For contingency fees, use `type: "ContingencyFee"` with `rate: <percentage>` (no `activity_description`).
 
-`clio_create_flat_fee_activity` defaults to `activity_type="ExpenseEntry"`. This is deliberate — and is the second non-obvious thing this doc exists to tell you.
+### Gotcha: updating the rate after creation
 
-Activity total math in Clio:
+A second PATCH on the same matter **without** including the existing rate's `id` creates a NEW rate entry and leaves the old auto-generated TimeEntry as an orphan (both will appear on bills). To update cleanly, first `GET /matters/{id}.json?fields=custom_rate` to find the existing rate's `id`, then PATCH with that id plus the new `rate` value — this updates in place:
 
-| Type | Total formula |
-|---|---|
-| `TimeEntry` | `quantity_in_hours × rate` |
-| `ExpenseEntry` | `quantity × price` |
+```http
+PATCH /matters/999.json
+{"data": {"custom_rate": {
+  "type": "FlatRate",
+  "rates": [{"id": <existing rate id>, "rate": 750.00}]
+}}}
+```
 
-If you naively create a `TimeEntry` with `quantity_in_hours=0` and `price=595`, the total comes out to **$0.00**, because TimeEntry doesn't use the `price` field for math — it uses `rate`. A 0-hour TimeEntry with no rate set is always $0.
+To delete the rate entirely, use `_destroy: true` on the rate object (per Clio's docs on association updates).
 
-`ExpenseEntry` with `quantity=1` and `price=595` correctly produces `total=$595.00`. Hence the default.
+### Empirical data that was tested before finding `custom_rate`
 
-(You CAN make a TimeEntry produce a non-zero total — set `quantity_in_hours=1` and `rate=595`, getting "1 hour at $595/hour = $595". But that's misleading on bills since it doesn't represent what the work was, and the existing flat-fee TimeEntries on Clio accounts that I've seen are likely created via the UI which uses different mechanics.)
+Every variant of the top-level `billing_method` field — `"flat"`, `"Flat"`, `"FLAT"`, `"FlatRate"`, `"flat_fee"`, `"contingency"`, `"Contingency"`, `"hourly"`, integer `2`, `3` — all save as `"hourly"` on POST. PATCH after creation returns 200 OK but never changes the stored value. Companion field guesses that were also silently dropped: `flat_rate_amount`, `flat_rate`, `flat_rate_cost`, `flat_fee_amount`, `flat_fee`, `fee`, `fee_amount`, `quoted_fee`, `rate` (object), `rate_type`, `matter_rate`, `matter_rates`, `custom_rates` (plural), `billing_preference`, `billing_type`, `default_rate`. None of these are the setter. Only the nested `custom_rate` association works.
+
+## The legacy ExpenseEntry workaround (still useful for add-on charges)
+
+`clio_create_flat_fee_activity` is still in the tool set. It creates an `ExpenseEntry` with `quantity=1, price=<amount>` (giving `total=<amount>`). Do **not** use it for the primary flat fee — that's what `flat_rate_amount` on `clio_create_matter` is for, and doubling up would produce two billable line items.
+
+**When to use `clio_create_flat_fee_activity`:**
+
+- **Add-on charges** on top of the flat fee: credit-card processing surcharges, disbursements, filing fees, per-letter overages on capped matters, etc.
+- **Matters created without `flat_rate_amount`** where the fee wasn't known upfront and you later want to drop in a fixed amount without reconfiguring the rate. (If you want the matter to actually show as flat in reports, prefer a follow-up PATCH with `custom_rate` instead — but the ExpenseEntry path is fine if you just need the bill to total correctly.)
+
+### Why ExpenseEntry, not TimeEntry, for manual flat-amount line items
+
+A manual TimeEntry via the public API computes `total = quantity_in_hours × rate`, NOT `× price`. So a TimeEntry with `quantity_in_hours: 0` always totals $0 regardless of `price`. ExpenseEntry computes `total = quantity × price`, so `qty=1, price=N → total=N`. That's why `clio_create_flat_fee_activity` defaults to `ExpenseEntry`.
+
+(Clio's auto-generated flat_rate TimeEntry from the `custom_rate` association is a different mechanism — it sets `flat_rate: true`, which bypasses the quantity multiplication and uses the rate value directly. That's why it works when a manually-constructed TimeEntry wouldn't.)
 
 ## Caveats
 
-1. **The matter still says "hourly" in Clio's UI and reports.** Annoying but cosmetic. The bill amount is correct.
-2. **No "quoted fee" tracking at the matter level.** Clio's flat-fee feature normally lets you track "quoted $X, billed $Y" — you don't get that via this workaround. If you need it, store the quoted fee in a custom field on the matter.
-3. **Trust requests work.** They're tied to bills, not to the matter's `billing_method`.
-4. **If Clio ever fixes this**, `clio_create_flat_fee_activity` becomes obsolete (or at least optional). Update `clio_create_matter`'s docstring and consider deprecating the workaround tool.
+1. **Changing the rate after creation requires care** — include the existing rate's `id` in the PATCH to update in place, otherwise a duplicate rate + orphan TimeEntry are created. See the gotcha section above.
+2. **`activity_description` is optional.** If you want the matter's flat fee tied to a named activity description in Clio, pass `activity_description: {"id": <activity_description_id>}` inside the rate object. If you don't need that, pass `null` or omit — the rate works fine either way.
+3. **Trust requests** are tied to bills, not to the matter's `billing_method`. They work identically under hourly, flat, and contingency configurations.
+4. **Contingency fees** use the same mechanism: PATCH `custom_rate` with `type: "ContingencyFee"` and `rate: <percentage>` (decimal, e.g. `20` for 20%). No `activity_description` is valid for contingency.

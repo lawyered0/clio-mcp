@@ -49,9 +49,19 @@ Implication: if a field you're sending isn't taking effect, you can't tell from 
 
 ---
 
-## `billing_method` on /matters.json is silently ignored
+## `billing_method` at the matter root is silently ignored — use `custom_rate` instead
 
-The big one. Detailed in [flat-fee-workaround.md](flat-fee-workaround.md). Short version: every value sent for `billing_method` saves as `"hourly"`. PATCH after creation fails the same way silently. The Clio web UI uses an internal endpoint not exposed in v4. Workaround: leave matters as `"hourly"` and use a flat-amount Activity for the actual fee.
+Detailed in [flat-fee-workaround.md](flat-fee-workaround.md). Short version: every value sent for a top-level `billing_method` field saves as `"hourly"`. PATCH on that field after creation also returns 200 but doesn't change it. The flat-fee setter is not `billing_method` — it's a nested `custom_rate` association:
+
+```json
+PATCH /matters/{id}.json
+{"data": {"custom_rate": {
+  "type": "FlatRate",
+  "rates": [{"user": {"id": <attorney>}, "rate": <amount>}]
+}}}
+```
+
+After that PATCH, `GET` on the matter returns `billing_method: "flat"` and Clio auto-creates a billable `flat_rate: true` TimeEntry for the amount. For contingency, use `type: "ContingencyFee"` with `rate: <percentage>`. The `clio_create_matter` tool in this server exposes this via the `flat_rate_amount` parameter.
 
 ---
 

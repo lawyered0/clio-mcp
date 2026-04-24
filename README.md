@@ -4,7 +4,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for [Clio Man
 
 Lets [Claude](https://claude.ai) (or any MCP client) read and write your Clio data — contacts, matters, activities — directly from chat. Built and tested against Clio's v4 REST API.
 
-**Includes a documented workaround** for Clio's silent rejection of `billing_method` on matter creation — see [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) and the [Confirmed Clio API quirks](#confirmed-clio-api-quirks) section below.
+**Supports flat-fee billing in one call** — `clio_create_matter(..., flat_rate_amount=X)` chains POST + PATCH so Clio flips `billing_method` to `"flat"` and auto-creates the billable line item. This uses Clio's `custom_rate` association (top-level `billing_method` is silently ignored on POST/PATCH — see [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) and the [Confirmed Clio API quirks](#confirmed-clio-api-quirks) section below).
 
 ## Tools (10)
 
@@ -13,8 +13,8 @@ Lets [Claude](https://claude.ai) (or any MCP client) read and write your Clio da
 | `clio_who_am_i` | Auth check — confirm credentials work |
 | `clio_create_company_contact` | Create entity client (Inc., LLC, etc.) |
 | `clio_create_person_contact` | Create individual client |
-| `clio_create_matter` | Create matter, optional default attorney |
-| `clio_create_flat_fee_activity` | Add a flat-fee billable line item — the workaround |
+| `clio_create_matter` | Create matter, optional flat-fee setup via `flat_rate_amount` |
+| `clio_create_flat_fee_activity` | Add a billable line item (add-on expense, not the primary flat fee) |
 | `clio_find_contact` | Search by name and/or email |
 | `clio_find_matter` | Search by display_number, query, or client_id |
 | `clio_delete_matter` | Cleanup test data |
@@ -212,10 +212,8 @@ Clio runs on regional hosts. **Mixing region endpoints in a single request/respo
 | EU/UK | `eu.app.clio.com` |
 | AU | `au.app.clio.com` |
 
-### `billing_method` is silently ignored on POST /matters.json
-This is the big one. **Every value sent for `billing_method` (`"flat"`, `"Flat"`, `"FLAT"`, `"FlatRate"`, `"flat_fee"`, `"contingency"`, integers, etc.) results in `billing_method: "hourly"` on subsequent GET.** PATCH after creation also returns 200 but doesn't change the value. ~16 companion field guesses (`flat_rate_amount`, `flat_fee_amount`, `rate`, `matter_rate`, `billing_preference`, etc.) all silently ignored too. The Clio web UI uses a private endpoint not exposed in the public REST API.
-
-**Workaround**: leave matters as `"hourly"` and add a flat-amount Activity. See [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) and use `clio_create_flat_fee_activity`.
+### `billing_method` at the matter root is silently ignored — use `custom_rate` instead
+**Every value sent for a top-level `billing_method` field (`"flat"`, `"Flat"`, `"FLAT"`, `"FlatRate"`, `"flat_fee"`, `"contingency"`, integers, etc.) saves as `"hourly"`.** PATCH on the field after creation also returns 200 but doesn't change it. The flat-fee setter is not `billing_method` — it's a nested `custom_rate` association: `PATCH /matters/{id}.json` with `{"data": {"custom_rate": {"type": "FlatRate", "rates": [{"user": {"id": <attorney>}, "rate": <amount>}]}}}`. After that PATCH, GET returns `billing_method: "flat"` and Clio auto-creates a billable `flat_rate: true` TimeEntry for the amount. `clio_create_matter` exposes this via the `flat_rate_amount` parameter. See [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md).
 
 ### TimeEntry total math
 `TimeEntry.total = quantity_in_hours × rate`, **not** `× price`. So a TimeEntry with `quantity_in_hours: 0` always totals $0 regardless of `price`. For flat-fee line items, use `ExpenseEntry` (`total = quantity × price`) — `qty=1, price=N → total=N`.
@@ -281,6 +279,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
-Built from frustration with the official documentation. The flat-fee workaround in particular took several hours of empirical testing to uncover — written up in [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) so the next person doesn't have to.
+Built from frustration with the official documentation. The flat-fee setup in particular took several hours of empirical testing and a back-and-forth with Clio support to land on `custom_rate` as the correct mechanism — written up in [docs/flat-fee-workaround.md](docs/flat-fee-workaround.md) so the next person doesn't have to.
 
 By [@BitGrateful](https://x.com/BitGrateful).

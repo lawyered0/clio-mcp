@@ -340,40 +340,43 @@ def clio_create_person_contact(
 def clio_create_matter(
     client_id: int,
     description: str,
+    flat_rate_amount: Optional[float] = None,
     open_date: Optional[str] = None,
-    billing_method: str = "hourly",
     billable: bool = True,
     practice_area_id: Optional[int] = None,
     status: str = "open",
     attorney_id: Optional[int] = None,
     originating_attorney_id: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Create a Matter in Clio.
+    """Create a Matter in Clio, optionally configured as flat fee.
 
     Sets responsible_attorney (and originating_attorney if not specified
     separately) to attorney_id, falling back to CLIO_DEFAULT_ATTORNEY_ID
     from .env. Raises if neither is set.
 
-    KNOWN LIMITATION (confirmed empirically against the live API):
-    Clio's REST API silently ignores billing_method on POST /matters.json.
-    No matter what value you send ("flat", "Flat", "FlatRate", "flat_fee",
-    integers, etc.), the matter is saved as "hourly" when GETted back.
-    PATCH after creation also returns 200 but doesn't change the value.
-    Companion fields (flat_rate_amount, rate, billing_preference, ~16
-    others) are all silently ignored too. The Clio web UI uses a private
-    endpoint not exposed in the public REST API.
+    FLAT-FEE SETUP: When flat_rate_amount is provided, after the matter is
+    created it is PATCHed with a FlatRate custom_rate. Clio then (a) flips
+    billing_method to "flat" and (b) auto-creates a billable flat_rate
+    TimeEntry whose total equals the amount. The matter is then fully
+    configured for invoicing the flat fee — no additional activity needed.
+    If omitted, the matter is created with Clio's default ("hourly") and
+    no rate; add line items later via clio_create_flat_fee_activity or a
+    manual PATCH.
 
-    WORKAROUND: leave matters as "hourly" and add a flat-fee Activity via
-    clio_create_flat_fee_activity. Bills generated from the matter will
-    total to the activity amount. See docs/flat-fee-workaround.md.
+    Note on billing_method at the matter root: Clio silently ignores a
+    top-level billing_method field on POST/PATCH (every value saves as
+    "hourly"). The only working mechanism is the custom_rate association
+    used here. See docs/flat-fee-workaround.md for the full history and
+    docs/clio-api-quirks.md for related gotchas.
 
     Args:
         client_id: Clio contact id of the client (required). Look up via
             clio_find_contact if needed.
         description: Matter description (required).
+        flat_rate_amount: Flat fee in dollars, e.g. 595.00. When set, matter
+            is configured as FlatRate at creation (see "FLAT-FEE SETUP"
+            above). Omit only if the fee is not yet known at creation time.
         open_date: ISO date YYYY-MM-DD. Defaults to today.
-        billing_method: Sent to Clio but currently ignored (see above).
-            Defaults to "hourly" since that's what Clio will store regardless.
         billable: True (default) for billable matters.
         practice_area_id: Optional Clio practice area id.
         status: "open" (default), "pending", or "closed".
@@ -383,7 +386,11 @@ def clio_create_matter(
 
     Returns:
         {"status_code": int, "body": <parsed JSON>}.
-        On success (201), body["data"] contains the created matter.
+        On success, body["data"] contains the matter id + display_number.
+        If the initial POST fails, that error is returned and no PATCH is
+        attempted. If POST succeeds but PATCH fails, the matter exists but
+        is still hourly — inspect the PATCH error and retry via
+        clio_api_request.
     """
     aid = _resolve_attorney_id(attorney_id)
     oaid = originating_attorney_id or aid
@@ -392,7 +399,6 @@ def clio_create_matter(
         "client": {"id": client_id},
         "description": description,
         "open_date": open_date or date.today().isoformat(),
-        "billing_method": billing_method,
         "billable": billable,
         "status": status,
         "responsible_attorney": {"id": aid},
@@ -401,7 +407,22 @@ def clio_create_matter(
     if practice_area_id is not None:
         matter["practice_area"] = {"id": practice_area_id}
 
-    return _clio_request("POST", "matters.json", body={"data": matter})
+    response = _clio_request("POST", "matters.json", body={"data": matter})
+    if response.get("status_code") != 201 or flat_rate_amount is None:
+        return response
+
+    matter_id = response["body"]["data"]["id"]
+    patch_body = {
+        "data": {
+            "custom_rate": {
+                "type": "FlatRate",
+                "rates": [
+                    {"user": {"id": aid}, "rate": flat_rate_amount}
+                ],
+            }
+        }
+    }
+    return _clio_request("PATCH", f"matters/{matter_id}.json", body=patch_body)
 
 
 @mcp.tool()
@@ -412,20 +433,27 @@ def clio_create_flat_fee_activity(
     entry_date: Optional[str] = None,
     activity_type: str = "ExpenseEntry",
 ) -> dict[str, Any]:
-    """Add a flat-fee billable line item to a matter.
+    """Add a billable line item (add-on expense) to a matter.
 
-    The supported way to do flat-fee billing via the Clio v4 API. Since
-    POST /matters.json silently ignores billing_method (see clio_create_matter
-    for details), the matter stays labeled "hourly" but the actual billing
-    math comes from the activities on it. A bill generated from the matter
-    will total to the sum of its billable activities — including this
-    flat-amount line item.
+    PRIMARY FLAT FEE: Use clio_create_matter(..., flat_rate_amount=X) to set
+    the matter's main flat fee. That configures the matter as FlatRate and
+    Clio auto-creates a flat_rate TimeEntry for the amount. Do NOT use this
+    tool for the primary flat fee — you'd end up with two billable line items.
 
-    DEFAULT IS ExpenseEntry, NOT TimeEntry. Confirmed empirically: TimeEntry
-    via the API computes total as `quantity_in_hours * rate`, so a 0-hour
-    flat fee produces total=$0 regardless of the `price` field. ExpenseEntry
-    computes total as `quantity * price`, so qty=1 with price=<amount>
-    correctly gives total=<amount>.
+    USE THIS TOOL FOR add-on charges on top of the primary fee: credit card
+    processing surcharges, disbursements, filing fees, per-letter overages
+    on capped matters, etc. Also useful for matters that were created without
+    a flat_rate_amount (rate unknown at creation) where you later just want
+    to drop in a fixed amount without reconfiguring the rate. See
+    docs/flat-fee-workaround.md for background.
+
+    DEFAULT IS ExpenseEntry, NOT TimeEntry. Confirmed empirically: a manual
+    TimeEntry via the API computes total as `quantity_in_hours * rate`, so a
+    0-hour flat fee produces total=$0 regardless of the `price` field.
+    ExpenseEntry computes total as `quantity * price`, so qty=1 with
+    price=<amount> correctly gives total=<amount>. Clio's auto-generated
+    flat_rate TimeEntry from custom_rate is a different mechanism — it sets
+    flat_rate=true and bypasses the quantity multiplication.
 
     Args:
         matter_id: Clio matter id to attach the activity to (required).
